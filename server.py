@@ -5,6 +5,7 @@ description: a simple multi-threaded TCP server
 """
 import queue
 import socket
+from os import remove
 from threading import Thread
 from protocol import *
 import hashlib
@@ -13,10 +14,12 @@ import hashlib
 QUEUE_SIZE = 10
 IP = '0.0.0.0'
 PORT = 8080
-PASSWORD = '0002139999'
+PASSWORD = '0001739999'
 LENGTH = 10
 PASWORD_HASEHD = hashlib.md5(PASSWORD.encode('utf-8')).hexdigest().upper()
 CLIENTS = []
+password_found = False
+
 
 work_queue = queue.Queue()
 for start in range(0, 10000000000, 500000):
@@ -32,31 +35,48 @@ def handle_connection(client_socket, client_address):
     :return: None
     """
     CLIENTS.append(client_socket)
+    thisones_ranges = []
+    global password_found
     try:
         print('New connection received from ' + client_address[0] + ':' + str(client_address[1]))
         # handle the communication
-
-        thisones_range = work_queue.get()
-        start_rng, end_rng = thisones_range
-        data = f"{PASWORD_HASEHD},{start_rng},{end_rng}, {LENGTH}".encode()
-        protocol_send(client_socket, data)
-        while True:
+        while not password_found and not work_queue.empty():
+            protocol_send(client_socket, f"{PASWORD_HASEHD},{LENGTH}".encode())
+            num_of_cores = protocol_recive(client_socket)
+            print('num_of_cores:', num_of_cores)
+            if not num_of_cores:
+                print('client disconnected' + client_address[0] + ':' + str(client_address[1]))
+                CLIENTS.remove(client_socket)
+                raise ConnectionError
+            num_of_cores = int(num_of_cores.decode())
+            for i in range(num_of_cores):
+                rng = work_queue.get()
+                thisones_ranges.append(rng)
+                protocol_send(client_socket, str(rng).encode())
             data = protocol_recive(client_socket)
             if not data:
                 print('client disconnected' + client_address[0] + ':' + str(client_address[1]))
                 CLIENTS.remove(client_socket)
-                # need to make to save what the client worked on
-                #^- protocol will be password,range of work as data tuple
                 break
-            if data == ('password is: ' + PASWORD_HASEHD).encode():
+            print(data)
+            data = data.decode()
+            found,password = data.split(',')
+            if found == 'True':
+                password_found = True
                 for client in CLIENTS:
-                    if client != client_socket:
-                        protocol_send(client_socket, b'True')
+                    protocol_send(client, b'True,True')
+                    print('found')
 
     except socket.error as err:
         print('received socket exception - ' + str(err))
     finally:
+        if not password_found:
+            for rng in thisones_ranges:
+                work_queue.put(rng)
+        if client_socket in CLIENTS:
+            CLIENTS.remove(client_socket)
         client_socket.close()
+        print('in clients:', CLIENTS)
 
 
 def main():
@@ -66,7 +86,6 @@ def main():
         server_socket.bind((IP, PORT))
         server_socket.listen(QUEUE_SIZE)
         print("Listening for connections on port %d" % PORT)
-
         while True:
             client_socket, client_address = server_socket.accept()
             thread = Thread(target=handle_connection,
